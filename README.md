@@ -1,5 +1,9 @@
 To run them from my volatility directory:
+
+
 python3.13 vol.py -f C:\2025TC.dmp windows.steam_artifacts.SteamArtifacts
+
+
 python3.13 vol.py -f C:\2025TC.dmp vol -f windows.meta_horizon_worlds.MetaHorizonWorlds
 
 The steam version extracts strings, but at present no VAC or login credentials:
