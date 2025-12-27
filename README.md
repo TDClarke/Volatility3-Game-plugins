@@ -31,4 +31,4 @@ Process, Account and Game keys and other data using YaraScan in the plugin.
 
 These competing approaches enable me to explore using Regex, text filters, YaraScan patterns JSON data!
 
-TODO: Explore extracting steam credentials!
+TODO: Explore extracting steam credentials & test the speed of the different approaches for each application!
