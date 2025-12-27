@@ -1,3 +1,4 @@
+# “Donated under Volatility Foundation, Inc. Individual Contributor Licensing Agreement”;
 """
 SteamArtifacts Volatility 3 Plugin
 
@@ -206,5 +207,6 @@ class SteamArtifacts(interfaces.plugins.PluginInterface):
             ],
             self._generator()
         )
+
 
 
