@@ -29,6 +29,6 @@ The meta world one extracts tokens and chats:
 The EA artifacts one extracts:
 Process, Account and Game keys and other data using YaraScan in the plugin.
 
-These competing approaches enable me to explore using Regex, filter JSON and YaraScan patterns!
+These competing approaches enable me to explore using Regex, text filters, YaraScan patterns JSON data!
 
 TODO: Explore extracting steam credentials!
