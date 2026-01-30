@@ -2,18 +2,14 @@
 """
 SteamArtifacts Volatility 3 Plugin
 
-Donated under Volatility Foundation, Inc. Individual Contributor Licensing Agreement.
-
 This plugin extracts forensic artefacts from the Steam client (steam.exe)
 by scanning the process virtual address space for printable strings and
-filtering them for Steam-related indicators such as SteamIDs, URLs,
-installation paths, and network artefacts.
-
-Author: Volatility Foundation Contributor
+filtering them for Steam-related indicators.
 """
 
 from volatility3.framework import interfaces, renderers, exceptions
 from volatility3.framework.configuration import requirements
+from volatility3.framework.objects import utility
 from volatility3.plugins.windows import pslist
 import re
 
@@ -44,12 +40,12 @@ class SteamArtifacts(interfaces.plugins.PluginInterface):
             requirements.ModuleRequirement(
                 name="kernel",
                 description="Windows kernel",
-                architectures=["Intel32", "Intel64"]
+                architectures=["Intel32", "Intel64"],
             )
         ]
 
     # ------------------------------------------------------------
-    # Locate steam.exe
+    # Locate steam.exe (FIXED)
     # ------------------------------------------------------------
     def _get_steam_processes(self):
         """
@@ -67,17 +63,20 @@ class SteamArtifacts(interfaces.plugins.PluginInterface):
 
         for proc in pslist.PsList.list_processes(
             context=self.context,
-            kernel_module_name=kernel.name
+            kernel_module_name=kernel.name,
         ):
             try:
-                name = proc.ImageFileName.cast("string", max_length=15)
+                # SAFE: does not assume UTF-8
+                name = utility.array_to_string(proc.ImageFileName)
+
                 if name.lower() == "steam.exe":
                     yield proc
+
             except exceptions.InvalidAddressException:
                 continue
 
     # ------------------------------------------------------------
-    # Extract printable strings (symbol-safe)
+    # Extract printable strings
     # ------------------------------------------------------------
     def _extract_strings(self, proc, min_len=6):
         """
@@ -111,7 +110,7 @@ class SteamArtifacts(interfaces.plugins.PluginInterface):
                 data = layer.read(
                     vad.get_start(),
                     vad.get_size(),
-                    pad=True
+                    pad=True,
                 )
             except exceptions.InvalidAddressException:
                 continue
@@ -162,7 +161,7 @@ class SteamArtifacts(interfaces.plugins.PluginInterface):
         return False
 
     # ------------------------------------------------------------
-    # TreeGrid generator (REQUIRED)
+    # TreeGrid generator
     # ------------------------------------------------------------
     def _generator(self):
         """
@@ -205,8 +204,5 @@ class SteamArtifacts(interfaces.plugins.PluginInterface):
                 ("PID", int),
                 ("Steam Artefact", str),
             ],
-            self._generator()
+            self._generator(),
         )
-
-
-
