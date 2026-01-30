@@ -1,3 +1,5 @@
+# “Donated under Volatility Foundation, Inc. Individual Contributor Licensing Agreement”;
+
 from volatility3.framework import interfaces, exceptions
 from volatility3.framework.configuration import requirements
 from volatility3.framework.renderers import TreeGrid
@@ -169,3 +171,4 @@ class EAChromium(interfaces.plugins.PluginInterface):
             ],
             self._generator(),
         )
+
