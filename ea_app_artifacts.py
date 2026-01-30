@@ -7,24 +7,11 @@ EA App Artifacts Volatility 3 Plugin
 This Volatility 3 plugin extracts forensic artefacts from the EA App
 (formerly Origin) processes in Windows memory images.
 
-The plugin focuses on recovering memory-resident artefacts related to:
-- OAuth authentication (access and refresh tokens)
-- JWT bearer tokens (decoded without verification)
-- EA account identity and user metadata
-- Device and installation identifiers
-- Game entitlement and launch metadata
-- EA network endpoints and API URLs
-
-Operation overview:
-- Enumerates running processes
-- Filters for EA-related executables
-- Scans readable VAD regions using YARA rules
-- Carves JSON objects from memory windows
-- Extracts and categorizes relevant artefacts
-- Outputs structured forensic results via TreeGrid
-
-This plugin is intended for digital forensics and incident response (DFIR)
-use cases involving EA App activity.
+The plugin focuses on:
+- OAuth tokens and JWTs
+- Account, device, and game metadata
+- EA network endpoints
+- Electron / Node.js artefacts commonly found in EA App memory
 """
 
 import json
@@ -41,65 +28,46 @@ from volatility3.plugins.windows import pslist, vadinfo
 class EAAppArtifacts(interfaces.plugins.PluginInterface):
     """
     Volatility 3 plugin to extract EA App artefacts from Windows memory images.
-
-    This plugin scans EA-related processes for authentication tokens,
-    account data, device identifiers, game metadata, and network artefacts.
-    It uses YARA-based memory scanning combined with JSON carving to recover
-    structured data from process memory.
-
-    Attributes:
-        _required_framework_version (tuple):
-            Minimum supported Volatility framework version.
-
-        _version (tuple):
-            Plugin version number.
-
-        MAX_WINDOW (int):
-            Maximum number of bytes read from each matching memory region
-            for JSON carving.
-
-        EA_PROCESS_NAMES (set):
-            Executable names associated with the EA App ecosystem.
-
-        ACCOUNT_KEYS (set):
-            JSON keys related to EA account identity.
-
-        DEVICE_KEYS (set):
-            JSON keys related to device and installation identity.
-
-        GAME_KEYS (set):
-            JSON keys related to game entitlements and execution.
-
-        EA_YARA_RULES (str):
-            YARA rules used to detect EA-related artefacts in memory.
     """
 
+    # Minimum Volatility framework version required
     _required_framework_version = (2, 0, 0)
+
+    # Plugin version
     _version = (4, 0, 1)
 
+    # Maximum amount of data processed per hit (prevents runaway parsing)
     MAX_WINDOW = 8192
 
+    # Chunk size used when scanning VAD memory regions
+    VAD_CHUNK_SIZE = 0x4000  # 16 KB
+
+    # Known EA App-related process names
     EA_PROCESS_NAMES = {
         "eadesktop.exe",
         "eaapp.exe",
         "eabackgroundservice.exe",
     }
 
+    # Common EA account-related JSON keys
     ACCOUNT_KEYS = {
         "userId", "pidId", "personaId", "originPersonaId",
         "displayName", "email", "country", "locale"
     }
 
+    # Device / installation identifiers
     DEVICE_KEYS = {
         "deviceId", "machineId", "installationId",
         "hardwareId"
     }
 
+    # Game / entitlement metadata
     GAME_KEYS = {
         "gameId", "offerId", "entitlementId",
         "executablePath", "launchArgs", "isTrial", "licenseState"
     }
 
+    # YARA rules used to detect EA App artefacts in memory
     EA_YARA_RULES = r"""
     rule EA_CORE_ARTIFACTS
     {
@@ -117,15 +85,15 @@ class EAAppArtifacts(interfaces.plugins.PluginInterface):
     }
     """
 
+    # -------------------------------------------------------------
+
     @classmethod
     def get_requirements(cls):
         """
-        Define plugin requirements for Volatility.
+        Declare plugin requirements.
 
-        Returns:
-            list:
-                A list containing a ModuleRequirement for the Windows kernel,
-                supporting Intel 32-bit and 64-bit architectures.
+        This plugin requires access to the Windows kernel module
+        in order to enumerate processes and VADs.
         """
         return [
             requirements.ModuleRequirement(
@@ -139,52 +107,41 @@ class EAAppArtifacts(interfaces.plugins.PluginInterface):
 
     def _compile_rules(self):
         """
-        Compile embedded YARA rules used to detect EA artefacts in memory.
-
-        Returns:
-            yara.Rules:
-                Compiled YARA ruleset.
+        Compile the embedded YARA rules.
         """
         return yara.compile(source=self.EA_YARA_RULES)
 
     def _is_ea_process(self, name):
         """
-        Check whether a process name belongs to an EA App process.
-
-        Args:
-            name (str):
-                Process image name.
-
-        Returns:
-            bool:
-                True if the process is EA-related, False otherwise.
+        Determine whether a process name matches known EA App executables.
         """
         return name.lower() in self.EA_PROCESS_NAMES
 
     # -------------------------------------------------------------
 
+    def _b64pad(self, s):
+        """
+        Pad Base64URL strings to a valid length for decoding.
+        """
+        return s + "=" * (-len(s) % 4)
+
     def _decode_jwt(self, token):
         """
-        Decode a JSON Web Token (JWT) without signature verification.
+        Decode a JWT without verifying the signature.
 
-        This method Base64URL-decodes the header and payload portions
-        of the JWT. Signature validation is intentionally omitted for
-        forensic inspection purposes.
-
-        Args:
-            token (str):
-                JWT string.
-
-        Returns:
-            dict or None:
-                Dictionary containing decoded 'header' and 'payload',
-                or None if decoding fails.
+        This is safe for forensic analysis and allows extraction
+        of claims stored in memory.
         """
         try:
             header_b64, payload_b64, _ = token.split(".")
-            header = json.loads(base64.urlsafe_b64decode(header_b64 + "=="))
-            payload = json.loads(base64.urlsafe_b64decode(payload_b64 + "=="))
-            return {"header": header, "payload": payload}
+            return {
+                "header": json.loads(
+                    base64.urlsafe_b64decode(self._b64pad(header_b64))
+                ),
+                "payload": json.loads(
+                    base64.urlsafe_b64decode(self._b64pad(payload_b64))
+                ),
+            }
         except Exception:
             return None
 
@@ -192,20 +149,13 @@ class EAAppArtifacts(interfaces.plugins.PluginInterface):
 
     def _carve_json_objects(self, data):
         """
-        Carve JSON objects from a raw memory buffer.
+        Extract JSON objects from a raw memory buffer.
 
-        This performs a simple brace-based extraction and attempts
-        to parse JSON dictionaries from memory.
-
-        Args:
-            data (bytes):
-                Raw memory data.
-
-        Returns:
-            list:
-                List of successfully parsed JSON dictionaries.
+        Uses a simple brace-based heuristic suitable for
+        Electron / Node.js memory artefacts.
         """
         results = []
+
         for blob in re.findall(rb"\{.*?\}", data, re.DOTALL):
             try:
                 parsed = json.loads(blob.decode(errors="ignore"))
@@ -213,55 +163,62 @@ class EAAppArtifacts(interfaces.plugins.PluginInterface):
                     results.append(parsed)
             except Exception:
                 continue
+
         return results
 
     # -------------------------------------------------------------
 
     def _scan_vads(self, context, proc, rules):
         """
-        Scan readable VAD regions of a process using YARA rules.
+        Scan readable VAD regions belonging to a process.
 
-        Args:
-            context:
-                Volatility context object.
-            proc:
-                Process object to scan.
-            rules (yara.Rules):
-                Compiled YARA rules.
-
-        Yields:
-            bytes:
-                Raw memory data from matching VAD regions.
+        Memory is scanned in fixed-size chunks to:
+        - Avoid invalid address exceptions
+        - Reduce memory overhead
+        - Improve stability on fragmented VADs
         """
         process_layer_name = proc.add_process_layer()
         layer = context.layers[process_layer_name]
 
         for vad in vadinfo.VadInfo.list_vads(proc):
-            protection = vad.get_protection(vadinfo.PROTECT_FLAGS)
-            if not protection.startswith("READ"):
-                continue
-
             try:
-                data = layer.read(vad.get_start(), vad.get_size(), pad=True)
-            except exceptions.InvalidAddressException:
+                # Decode VAD protection flags using Volatility helpers
+                protection = vad.get_protection(
+                    vadinfo.PROTECT_VALUES,
+                    vadinfo.WINNT_PROTECTIONS
+                )
+            except Exception:
                 continue
 
-            for _ in rules.match(data=data):
-                yield data
+            # Only scan readable memory regions
+            if not protection or "READ" not in protection:
+                continue
+
+            vad_start = vad.get_start()
+            vad_end = vad.get_end()
+
+            for offset in range(vad_start, vad_end, self.VAD_CHUNK_SIZE):
+                try:
+                    chunk = layer.read(
+                        offset,
+                        self.VAD_CHUNK_SIZE,
+                        pad=True
+                    )
+                except exceptions.InvalidAddressException:
+                    continue
+
+                # Only return chunks that trigger the YARA rules
+                if rules.match(data=chunk):
+                    yield chunk
 
     # -------------------------------------------------------------
 
     def _generator(self):
         """
-        Generate TreeGrid rows containing extracted EA artefacts.
+        Core generator used by the TreeGrid renderer.
 
-        This method orchestrates process enumeration, memory scanning,
-        JSON carving, artefact extraction, and record construction.
-
-        Yields:
-            tuple:
-                TreeGrid-compatible rows with process metadata and
-                JSON-encoded artefact categories.
+        Iterates over EA App processes, scans memory,
+        extracts artefacts, and yields structured results.
         """
         context = self.context
         rules = self._compile_rules()
@@ -271,14 +228,15 @@ class EAAppArtifacts(interfaces.plugins.PluginInterface):
             self.config["kernel"]
         ):
             proc_name = utility.array_to_string(proc.ImageFileName)
+
             if not self._is_ea_process(proc_name):
                 continue
 
             for data in self._scan_vads(context, proc, rules):
                 window = data[:self.MAX_WINDOW]
-                json_objects = self._carve_json_objects(window)
 
-                for obj in json_objects:
+                for obj in self._carve_json_objects(window):
+                    # Structured output record
                     record = {
                         "oauth": {},
                         "account": {},
@@ -296,7 +254,7 @@ class EAAppArtifacts(interfaces.plugins.PluginInterface):
                     if "refresh_token" in obj:
                         record["oauth"]["refresh_token"] = obj.get("refresh_token")
 
-                    # JWT decoding
+                    # JWT detection and decoding
                     for val in obj.values():
                         if isinstance(val, str) and val.startswith("eyJ"):
                             decoded = self._decode_jwt(val)
@@ -308,23 +266,24 @@ class EAAppArtifacts(interfaces.plugins.PluginInterface):
                         if k in obj:
                             record["account"][k] = obj[k]
 
-                    # Device metadata
+                    # Device identifiers
                     for k in self.DEVICE_KEYS:
                         if k in obj:
                             record["device"][k] = obj[k]
 
-                    # Game metadata
+                    # Game / entitlement information
                     for k in self.GAME_KEYS:
                         if k in obj:
                             record["game"][k] = obj[k]
 
-                    # Network endpoints
-                    for k in obj:
-                        if isinstance(obj[k], str) and "ea.com" in obj[k]:
+                    # EA network endpoints
+                    for v in obj.values():
+                        if isinstance(v, str) and "ea.com" in v:
                             record["network"].setdefault(
                                 "endpoints", []
-                            ).append(obj[k])
+                            ).append(v)
 
+                    # Only emit records that contain useful data
                     if any(record.values()):
                         yield (
                             0,
@@ -344,11 +303,7 @@ class EAAppArtifacts(interfaces.plugins.PluginInterface):
 
     def run(self):
         """
-        Execute the plugin and render results.
-
-        Returns:
-            renderers.TreeGrid:
-                TreeGrid containing extracted EA App artefacts.
+        Entry point for the Volatility renderer.
         """
         return renderers.TreeGrid(
             [
