@@ -31,4 +31,11 @@ Process, Account and Game keys and other data using YaraScan in the plugin.
 
 These competing approaches enable me to explore using Regex, text filters, YaraScan patterns JSON data!
 
+I found that the EA app is significantly hardened over Origin, making it harder to catch chats and auth keys, 
+so i created this to extract potential credentials, tokens, and chat strings 
+from EA background services and Chromium WebView processes associated with the EA App on Windows 11.
+
+python3.13 vol.py -f C:\TC2026.dmp windows.ea_chromium.EAChromium
+
+
 TODO: Explore extracting steam credentials & test the speed of the different approaches for each application!
